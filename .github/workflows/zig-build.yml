@@ -1,1 +1,83 @@
+name: Build lame.exe with Zig
 
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.1
+
+      - name: Extract source ZIP
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:GITHUB_WORKSPACE "lamev2-zig-cloud-build.zip"
+          if (-not (Test-Path $zip)) {
+            throw "Source ZIP not found: $zip"
+          }
+          $extractRoot = Join-Path $env:RUNNER_TEMP "lame-source"
+          New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
+          Expand-Archive -LiteralPath $zip -DestinationPath $extractRoot -Force
+
+          $core = Get-ChildItem -Path $extractRoot -Filter "core.cxx" -File -Recurse | Select-Object -First 1
+          if (-not $core) {
+            Write-Host "Extracted files:"
+            Get-ChildItem -Path $extractRoot -Recurse | Select-Object -First 100 FullName
+            throw "Could not find core.cxx in the extracted ZIP."
+          }
+
+          $projectDir = $core.Directory.FullName
+          "PROJECT_DIR=$projectDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Using source directory: $projectDir"
+
+      - name: Build Release x64
+        shell: pwsh
+        run: |
+          Set-Location $env:PROJECT_DIR
+          New-Item -ItemType Directory -Force -Path builds/x64/Release | Out-Null
+
+          $sources = @(
+            "core.cxx",
+            "impl/deps/LzmaDec.c",
+            "impl/deps/lzma_helper.cpp",
+            "impl/ImGui/imgui_demo.cpp",
+            "impl/ui/overlay.cxx",
+            "impl/ImGui/imgui.cpp",
+            "impl/ImGui/imgui_draw.cpp",
+            "impl/ImGui/imgui_tables.cpp",
+            "impl/ImGui/imgui_widgets.cpp",
+            "impl/ImGui/imgui_impl_win32.cpp",
+            "impl/ImGui/imgui_impl_dx11.cpp"
+          )
+          foreach ($source in $sources) {
+            if (-not (Test-Path $source)) {
+              throw "Required source file missing: $source"
+            }
+          }
+
+          zig c++ -target x86_64-windows-gnu -std=c++20 -O2 -DNDEBUG `
+            -DUNICODE -D_UNICODE `
+            -I. -Iimpl -Iimpl/deps -Iimpl/ImGui `
+            @sources `
+            -municode -Wl,--subsystem,windows `
+            -ld3d11 -ldxgi -ld3dcompiler -ldwmapi -lntdll -lshell32 -lwinhttp `
+            -o builds/x64/Release/lame.exe
+          if ($LASTEXITCODE -ne 0) {
+            throw "Zig compilation failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: lame-windows-x64-release
+          path: ${{ env.PROJECT_DIR }}/builds/x64/Release/lame.exe
+          if-no-files-found: error
