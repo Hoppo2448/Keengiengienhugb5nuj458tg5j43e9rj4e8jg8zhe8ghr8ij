@@ -1,0 +1,46 @@
+name: Build lame.exe with Zig
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.1
+
+      - name: Build Release x64
+        shell: pwsh
+        working-directory: lamev2/lame
+        run: |
+          New-Item -ItemType Directory -Force -Path builds/x64/Release | Out-Null
+          zig c++ -target x86_64-windows-gnu -std=c++20 -O2 -DNDEBUG `
+            -DUNICODE -D_UNICODE `
+            -I. -Iimpl -Iimpl/deps -Iimpl/ImGui `
+            core.cxx `
+            impl/deps/LzmaDec.c `
+            impl/deps/lzma_helper.cpp `
+            impl/ImGui/imgui_demo.cpp `
+            impl/ui/overlay.cxx `
+            impl/ImGui/imgui.cpp `
+            impl/ImGui/imgui_draw.cpp `
+            impl/ImGui/imgui_tables.cpp `
+            impl/ImGui/imgui_widgets.cpp `
+            impl/ImGui/imgui_impl_win32.cpp `
+            impl/ImGui/imgui_impl_dx11.cpp `
+            -municode -Wl,--subsystem,windows `
+            -ld3d11 -ldxgi -ld3dcompiler -ldwmapi -lntdll -lshell32 -lwinhttp `
+            -o builds/x64/Release/lame.exe
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: lame-windows-x64-release
+          path: lamev2/lame/builds/x64/Release/lame.exe
