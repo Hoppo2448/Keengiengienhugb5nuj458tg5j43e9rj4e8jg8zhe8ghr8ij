@@ -54,6 +54,30 @@ jobs:
         shell: pwsh
         run: |
           Set-Location $env:PROJECT_DIR
+
+          # Zig's bundled libc++ requires filesystem::path for wide Windows paths
+          # passed to standard file streams. Normalize the three affected call sites.
+          $pathFixes = @(
+            @{ File = "core/replay/osr_decoder.hxx"; Pattern = 'std::ifstream file\(\s*path\s*,'; Replacement = 'std::ifstream file( std::filesystem::path(path),' },
+            @{ File = "core/beatmap/stable_parser.hxx"; Pattern = 'std::ifstream file\(\s*path\s*\)'; Replacement = 'std::ifstream file( std::filesystem::path(path) )' },
+            @{ File = "core/beatmap/songs_resolver.hxx"; Pattern = 'std::wifstream file\(\s*cfg_path\s*\)'; Replacement = 'std::wifstream file( std::filesystem::path(cfg_path) )' }
+          )
+          foreach ($fix in $pathFixes) {
+            if (-not (Test-Path $fix.File)) { throw "Expected source file missing for compatibility patch: $($fix.File)" }
+            $sourceText = [System.IO.File]::ReadAllText((Join-Path $env:PROJECT_DIR $fix.File))
+            if ($sourceText -notmatch [regex]::Escape($fix.Replacement)) {
+              $updatedText = [regex]::Replace($sourceText, $fix.Pattern, $fix.Replacement)
+              if ($updatedText -eq $sourceText) { throw "Could not apply filesystem::path compatibility patch in $($fix.File)" }
+              if ($updatedText -notmatch '#include\s*<filesystem>') {
+                $updatedText = "#include <filesystem>`n" + $updatedText
+              }
+              [System.IO.File]::WriteAllText((Join-Path $env:PROJECT_DIR $fix.File), $updatedText, [System.Text.UTF8Encoding]::new($false))
+              Write-Host "Patched wide-path stream call in $($fix.File)"
+            } else {
+              Write-Host "Wide-path stream call already patched in $($fix.File)"
+            }
+          }
+
           New-Item -ItemType Directory -Force -Path builds/x64/Release | Out-Null
           $cppSources = @(
             "core.cxx",
@@ -84,7 +108,6 @@ jobs:
             if (-not (Test-Path $library)) { throw "Windows SDK import library not found: $library" }
           }
 
-          # Compile C separately so C++-only flags are not applied to it.
           zig cc -target x86_64-windows-gnu -O2 -DNDEBUG -DUNICODE -D_UNICODE -I. -Iimpl -Iimpl/deps -Iimpl/ImGui -c $cSource -o builds/x64/Release/LzmaDec.o
           if ($LASTEXITCODE -ne 0) { throw "C compilation failed with exit code $LASTEXITCODE" }
 
