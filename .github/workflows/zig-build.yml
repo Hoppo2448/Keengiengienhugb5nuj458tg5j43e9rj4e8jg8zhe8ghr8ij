@@ -21,21 +21,32 @@ jobs:
         shell: pwsh
         run: |
           $zip = Join-Path $env:GITHUB_WORKSPACE "lamev2-zig-cloud-build.zip"
-          if (-not (Test-Path $zip)) {
-            throw "Source ZIP not found: $zip"
-          }
+          if (-not (Test-Path $zip)) { throw "Source ZIP not found: $zip" }
           $extractRoot = Join-Path $env:RUNNER_TEMP "lame-source"
           New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
           Expand-Archive -LiteralPath $zip -DestinationPath $extractRoot -Force
-
           $core = Get-ChildItem -Path $extractRoot -Filter "core.cxx" -File -Recurse | Select-Object -First 1
           if (-not $core) {
-            Write-Host "Extracted files:"
             Get-ChildItem -Path $extractRoot -Recurse | Select-Object -First 100 FullName
             throw "Could not find core.cxx in the extracted ZIP."
           }
-
           $projectDir = $core.Directory.FullName
+
+          # Convert UTF-16 LE source/header files to UTF-8 for Clang.
+          $textExtensions = @(".h", ".hh", ".hpp", ".hxx", ".c", ".cc", ".cpp", ".cxx")
+          $converted = 0
+          Get-ChildItem -Path $projectDir -Recurse -File | Where-Object {
+            $textExtensions -contains $_.Extension.ToLowerInvariant()
+          } | ForEach-Object {
+            $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+            if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) {
+              $text = [System.Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2)
+              [System.IO.File]::WriteAllText($_.FullName, $text, [System.Text.UTF8Encoding]::new($false))
+              $converted++
+              Write-Host "Converted UTF-16 source: $($_.FullName)"
+            }
+          }
+          Write-Host "Converted $converted UTF-16 source/header file(s)."
           "PROJECT_DIR=$projectDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Write-Host "Using source directory: $projectDir"
 
@@ -44,10 +55,8 @@ jobs:
         run: |
           Set-Location $env:PROJECT_DIR
           New-Item -ItemType Directory -Force -Path builds/x64/Release | Out-Null
-
-          $sources = @(
+          $cppSources = @(
             "core.cxx",
-            "impl/deps/LzmaDec.c",
             "impl/deps/lzma_helper.cpp",
             "impl/ImGui/imgui_demo.cpp",
             "impl/ui/overlay.cxx",
@@ -58,43 +67,31 @@ jobs:
             "impl/ImGui/imgui_impl_win32.cpp",
             "impl/ImGui/imgui_impl_dx11.cpp"
           )
-          foreach ($source in $sources) {
-            if (-not (Test-Path $source)) {
-              throw "Required source file missing: $source"
-            }
+          $cSource = "impl/deps/LzmaDec.c"
+          foreach ($source in (@($cSource) + $cppSources)) {
+            if (-not (Test-Path $source)) { throw "Required source file missing: $source" }
           }
 
           $sdkLibRoot = Join-Path "${env:ProgramFiles(x86)}" "Windows Kits/10/Lib"
           $sdkVersion = Get-ChildItem -Path $sdkLibRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1
-          if (-not $sdkVersion) {
-            throw "Windows SDK libraries were not found under $sdkLibRoot"
-          }
+          if (-not $sdkVersion) { throw "Windows SDK libraries were not found under $sdkLibRoot" }
           $sdkUmX64 = Join-Path $sdkVersion.FullName "um/x64"
           $systemLibraries = @(
-            "d3d11.lib",
-            "dxgi.lib",
-            "d3dcompiler.lib",
-            "dwmapi.lib",
-            "ntdll.lib",
-            "shell32.lib",
-            "winhttp.lib"
+            "d3d11.lib", "dxgi.lib", "d3dcompiler.lib", "dwmapi.lib",
+            "ntdll.lib", "shell32.lib", "winhttp.lib"
           ) | ForEach-Object { Join-Path $sdkUmX64 $_ }
           foreach ($library in $systemLibraries) {
-            if (-not (Test-Path $library)) {
-              throw "Windows SDK import library not found: $library"
-            }
+            if (-not (Test-Path $library)) { throw "Windows SDK import library not found: $library" }
           }
 
-          zig c++ -target x86_64-windows-gnu -std=c++20 -O2 -DNDEBUG `
-            -DUNICODE -D_UNICODE `
-            -I. -Iimpl -Iimpl/deps -Iimpl/ImGui `
-            @sources `
-            -municode '-Wl,--subsystem,windows' `
-            @systemLibraries `
-            -o builds/x64/Release/lame.exe
-          if ($LASTEXITCODE -ne 0) {
-            throw "Zig compilation failed with exit code $LASTEXITCODE"
-          }
+          # Compile C separately so C++-only flags are not applied to it.
+          zig cc -target x86_64-windows-gnu -O2 -DNDEBUG -DUNICODE -D_UNICODE -I. -Iimpl -Iimpl/deps -Iimpl/ImGui -c $cSource -o builds/x64/Release/LzmaDec.o
+          if ($LASTEXITCODE -ne 0) { throw "C compilation failed with exit code $LASTEXITCODE" }
+
+          zig c++ -target x86_64-windows-gnu -std=c++20 -O2 -DNDEBUG -DUNICODE -D_UNICODE -I. -Iimpl -Iimpl/deps -Iimpl/ImGui @cppSources builds/x64/Release/LzmaDec.o -municode '-Wl,--subsystem,windows' @systemLibraries -o builds/x64/Release/lame.exe
+          if ($LASTEXITCODE -ne 0) { throw "Zig C++ compilation/link failed with exit code $LASTEXITCODE" }
+          if (-not (Test-Path builds/x64/Release/lame.exe)) { throw "lame.exe was not produced." }
+          Get-Item builds/x64/Release/lame.exe | Select-Object FullName, Length
 
       - name: Upload executable
         uses: actions/upload-artifact@v4
