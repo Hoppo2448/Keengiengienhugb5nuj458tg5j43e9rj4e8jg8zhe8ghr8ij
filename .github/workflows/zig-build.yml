@@ -10,7 +10,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
@@ -64,12 +64,33 @@ jobs:
             }
           }
 
+          $sdkLibRoot = Join-Path "${env:ProgramFiles(x86)}" "Windows Kits/10/Lib"
+          $sdkVersion = Get-ChildItem -Path $sdkLibRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $sdkVersion) {
+            throw "Windows SDK libraries were not found under $sdkLibRoot"
+          }
+          $sdkUmX64 = Join-Path $sdkVersion.FullName "um/x64"
+          $systemLibraries = @(
+            "d3d11.lib",
+            "dxgi.lib",
+            "d3dcompiler.lib",
+            "dwmapi.lib",
+            "ntdll.lib",
+            "shell32.lib",
+            "winhttp.lib"
+          ) | ForEach-Object { Join-Path $sdkUmX64 $_ }
+          foreach ($library in $systemLibraries) {
+            if (-not (Test-Path $library)) {
+              throw "Windows SDK import library not found: $library"
+            }
+          }
+
           zig c++ -target x86_64-windows-gnu -std=c++20 -O2 -DNDEBUG `
             -DUNICODE -D_UNICODE `
             -I. -Iimpl -Iimpl/deps -Iimpl/ImGui `
             @sources `
             -municode '-Wl,--subsystem,windows' `
-            -ld3d11 -ldxgi -ld3dcompiler -ldwmapi -lntdll -lshell32 -lwinhttp `
+            @systemLibraries `
             -o builds/x64/Release/lame.exe
           if ($LASTEXITCODE -ne 0) {
             throw "Zig compilation failed with exit code $LASTEXITCODE"
