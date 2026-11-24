@@ -68,7 +68,7 @@ jobs:
             -DUNICODE -D_UNICODE `
             -I. -Iimpl -Iimpl/deps -Iimpl/ImGui `
             @sources `
-            -municode -Wl,--subsystem,windows `
+            -municode '-Wl,--subsystem,windows' `
             -ld3d11 -ldxgi -ld3dcompiler -ldwmapi -lntdll -lshell32 -lwinhttp `
             -o builds/x64/Release/lame.exe
           if ($LASTEXITCODE -ne 0) {
