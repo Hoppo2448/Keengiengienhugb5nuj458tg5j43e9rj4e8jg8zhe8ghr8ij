@@ -58,9 +58,9 @@ jobs:
           # Zig's bundled libc++ requires filesystem::path for wide Windows paths
           # passed to standard file streams. Normalize the three affected call sites.
           $pathFixes = @(
-            @{ File = "core/replay/osr_decoder.hxx"; Pattern = 'std::ifstream file\(\s*path\s*,'; Replacement = 'std::ifstream file( std::filesystem::path(path),' },
-            @{ File = "core/beatmap/stable_parser.hxx"; Pattern = 'std::ifstream file\(\s*path\s*\)'; Replacement = 'std::ifstream file( std::filesystem::path(path) )' },
-            @{ File = "core/beatmap/songs_resolver.hxx"; Pattern = 'std::wifstream file\(\s*cfg_path\s*\)'; Replacement = 'std::wifstream file( std::filesystem::path(cfg_path) )' }
+            @{ File = "core/replay/osr_decoder.hxx"; Pattern = 'std::ifstream file\(\s*path\s*,'; Replacement = 'std::ifstream file{ std::filesystem::path(path),' },
+            @{ File = "core/beatmap/stable_parser.hxx"; Pattern = 'std::ifstream file\(\s*path\s*\)'; Replacement = 'std::ifstream file{ std::filesystem::path(path) }' },
+            @{ File = "core/beatmap/songs_resolver.hxx"; Pattern = 'std::wifstream file\(\s*cfg_path\s*\)'; Replacement = 'std::wifstream file{ std::filesystem::path(cfg_path) }' }
           )
           foreach ($fix in $pathFixes) {
             if (-not (Test-Path $fix.File)) { throw "Expected source file missing for compatibility patch: $($fix.File)" }
